@@ -1,0 +1,580 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useAuth } from '@/context/auth-context'
+import { Header } from '@/components/layout/header'
+import { PageLoader } from '@/components/shared/loading-spinner'
+import { LoadingButton } from '@/components/shared/loading-button'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog'
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from '@/components/ui/table'
+import { Clock, LogIn, LogOut, CheckCircle2, XCircle, Calendar, Download } from 'lucide-react'
+import { formatDate, getStatusColor } from '@/lib/utils'
+import { isHrLike } from '@/lib/auth'
+import { toast } from 'sonner'
+
+interface Attendance {
+    id: string
+    date: string
+    status: string
+    checkIn?: string | null
+    checkOut?: string | null
+    workingHours?: number | null
+    overtimeHours?: number | null
+    isOvertime?: boolean
+    notes?: string | null
+    user: {
+        id: string
+        name: string
+        email?: string
+        department?: string
+    }
+}
+
+interface AttendanceSummary {
+    presentToday: number
+    absentToday: number
+}
+
+const IST_TIME_ZONE = 'Asia/Kolkata'
+
+function formatTimeInIST(dateValue?: string | null): string {
+    if (!dateValue) return '-'
+
+    return new Intl.DateTimeFormat('en-IN', {
+        timeZone: IST_TIME_ZONE,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    }).format(new Date(dateValue))
+}
+
+function getISTDateKey(dateValue: Date | string): string {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: IST_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(new Date(dateValue))
+}
+
+function dedupeByISTDate(records: Attendance[]): Attendance[] {
+    const seen = new Set<string>()
+    const unique: Attendance[] = []
+
+    for (const record of records) {
+        const key = `${record.user.id}-${getISTDateKey(record.date)}`
+        if (!seen.has(key)) {
+            seen.add(key)
+            unique.push(record)
+        }
+    }
+
+    return unique
+}
+
+export default function AttendancePage() {
+    const { user } = useAuth()
+    const isHrUser = isHrLike(user?.role ?? 'EMPLOYEE', user?.designation ?? null)
+    const [attendances, setAttendances] = useState<Attendance[]>([])
+    const [loading, setLoading] = useState(true)
+    const [markDialogOpen, setMarkDialogOpen] = useState(false)
+    const [saving, setSaving] = useState(false)
+    const [todayAttendance, setTodayAttendance] = useState<Attendance | null>(null)
+    const [attendanceSummary, setAttendanceSummary] = useState<AttendanceSummary | null>(null)
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const now = new Date()
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    })
+
+    // Form state
+    const [formData, setFormData] = useState({
+        status: 'PRESENT' as string,
+        notes: '',
+    })
+
+    const canViewAll = user?.role === 'ADMIN' || isHrUser
+    const canUseCheckInOut = user?.role !== 'ADMIN'
+
+    const downloadCSV = () => {
+        if (attendances.length === 0) {
+            toast.error('No attendance records to download')
+            return
+        }
+
+        // CSV Headers
+        const headers = ['Employee Name', 'Email', 'Department', 'Date', 'Status', 'Check In', 'Check Out', 'Working Hours', 'Notes']
+
+        // Convert data to CSV rows
+        const rows = attendances.map(a => [
+            a.user.name,
+            a.user.email || '-',
+            a.user.department || '-',
+            formatDate(a.date),
+            a.status,
+            formatTimeInIST(a.checkIn),
+            formatTimeInIST(a.checkOut),
+            (a.workingHours ?? 0).toFixed(2),
+            a.notes?.replace(/,/g, ';') || '-'
+        ])
+
+        // Join headers and rows
+        const csvContent = [
+            headers.join(','),
+            ...rows.map(row => row.join(','))
+        ].join('\n')
+
+        // Create download link
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.setAttribute('href', url)
+        link.setAttribute('download', `Attendance_Report_${selectedMonth}.csv`)
+        link.style.visibility = 'hidden'
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        toast.success('Attendance report downloaded')
+    }
+
+    useEffect(() => {
+        fetchAttendances()
+    }, [selectedMonth])
+
+    const fetchAttendances = async () => {
+        try {
+            const url = canViewAll
+                ? `/api/attendance?month=${selectedMonth}`
+                : `/api/attendance?month=${selectedMonth}`
+            const res = await fetch(url)
+            if (res.ok) {
+                const data = await res.json()
+                const fetchedAttendances: Attendance[] = data.attendances || []
+                const normalizedAttendances = canViewAll
+                    ? fetchedAttendances
+                    : dedupeByISTDate(fetchedAttendances)
+
+                setAttendances(normalizedAttendances)
+                setAttendanceSummary(data.summary || null)
+
+                // Check if today's attendance exists
+                const today = getISTDateKey(new Date())
+                const todayRecord = normalizedAttendances.find(
+                    (a: Attendance) => getISTDateKey(a.date) === today && a.user.id === user?.userId
+                )
+                setTodayAttendance(todayRecord || null)
+            }
+        } catch (error) {
+            toast.error('Failed to load attendance')
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    const handleMarkAttendance = async (e: React.FormEvent) => {
+        e.preventDefault()
+        setSaving(true)
+
+        try {
+            const res = await fetch('/api/attendance', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData),
+            })
+
+            if (res.ok) {
+                toast.success('Attendance marked')
+                setMarkDialogOpen(false)
+                fetchAttendances()
+            } else {
+                const data = await res.json()
+                toast.error(data.error || 'Failed to mark attendance')
+            }
+        } catch (error) {
+            toast.error('Network error')
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const handleCheckout = async () => {
+        if (!todayAttendance) return
+
+        try {
+            const res = await fetch('/api/attendance/checkout', {
+                method: 'POST',
+            })
+
+            if (res.ok) {
+                const data = await res.json()
+                toast.success(`Checked out successfully! Total hours today: ${data.attendance.totalHours?.toFixed(2)} hours`)
+                fetchAttendances()
+            } else {
+                const data = await res.json()
+                toast.error(data.error || 'Failed to checkout')
+            }
+        } catch (error) {
+            toast.error('Network error')
+        }
+    }
+
+    const handleCheckIn = async () => {
+        try {
+            const res = await fetch('/api/attendance/clock', {
+                method: 'POST',
+            })
+
+            if (res.ok) {
+                await fetch('/api/user/activity', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ isIdle: false, stuckKey: false, eventType: 'manual_checkin' }),
+                })
+                toast.success('Checked in successfully')
+                fetchAttendances()
+            } else {
+                const data = await res.json()
+                toast.error(data.error || 'Failed to check in')
+            }
+        } catch (error) {
+            toast.error('Network error')
+        }
+    }
+
+    // Calculate stats
+    const myAttendances = attendances.filter((a) => a.user.id === user?.userId)
+    const myPresentDays = myAttendances.filter((a) => a.status === 'PRESENT').length
+    const myAbsentDays = myAttendances.filter((a) => a.status === 'ABSENT').length
+    const leaveDays = myAttendances.filter((a) => a.status === 'LEAVE').length
+    const presentDays = canViewAll ? (attendanceSummary?.presentToday || 0) : myPresentDays
+    const absentDays = canViewAll ? (attendanceSummary?.absentToday || 0) : myAbsentDays
+    const isActiveSession = !!todayAttendance && todayAttendance.status === 'PRESENT' && !todayAttendance.checkOut
+
+    if (loading) {
+        return (
+            <div className="min-h-screen">
+                <Header title="Attendance" description="Track your attendance" />
+                <PageLoader />
+            </div>
+        )
+    }
+
+    return (
+        <div className="min-h-screen">
+            <Header
+                title="Attendance"
+                description={canViewAll ? 'Team attendance overview' : 'Track your work hours'}
+            />
+
+            <div className="p-4 sm:p-6">
+                {/* Today's Status Card */}
+                <Card className="p-4 sm:p-6 mb-6 bg-gradient-to-br from-slate-900 to-slate-800 border-slate-700/50">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                        <div>
+                            <h2 className="text-lg font-semibold text-white mb-1">Today's Attendance</h2>
+                            <p className="text-slate-400 text-sm">
+                                {new Date().toLocaleDateString('en-US', {
+                                    timeZone: IST_TIME_ZONE,
+                                    weekday: 'long',
+                                    year: 'numeric',
+                                    month: 'long',
+                                    day: 'numeric',
+                                })}
+                            </p>
+                        </div>
+
+                        {todayAttendance ? (
+                            <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-2">
+                                    <Badge
+                                        variant="outline"
+                                        className={getStatusColor(todayAttendance.status)}
+                                    >
+                                        {todayAttendance.status}
+                                    </Badge>
+                                    {todayAttendance.checkIn && (
+                                        <span className="text-sm text-slate-400">
+                                            <LogIn className="inline h-4 w-4 mr-1" />
+                                            {formatTimeInIST(todayAttendance.checkIn)}
+                                        </span>
+                                    )}
+                                    {todayAttendance.checkOut && (
+                                        <span className="text-sm text-slate-400">
+                                            <LogOut className="inline h-4 w-4 mr-1" />
+                                            {formatTimeInIST(todayAttendance.checkOut)}
+                                        </span>
+                                    )}
+                                    {canUseCheckInOut && (
+                                        <span className="text-sm text-slate-300">
+                                            <Clock className="inline h-4 w-4 mr-1" />
+                                            {(todayAttendance.workingHours ?? 0).toFixed(2)}h
+                                        </span>
+                                    )}
+                                </div>
+                                {canUseCheckInOut && (
+                                    <div className="flex items-center gap-2">
+                                        <Button onClick={handleCheckIn} variant="secondary" disabled={isActiveSession}>
+                                            <LogIn className="h-4 w-4 mr-2" />
+                                            Check In
+                                        </Button>
+                                        <Button onClick={handleCheckout} variant="secondary" disabled={!isActiveSession}>
+                                            <LogOut className="h-4 w-4 mr-2" />
+                                            Check Out
+                                        </Button>
+                                    </div>
+                                )}
+                            </div>
+                        ) : (
+                            canUseCheckInOut ? (
+                                <div className="flex items-center gap-2">
+                                    <Button onClick={handleCheckIn} variant="secondary">
+                                        <LogIn className="h-4 w-4 mr-2" />
+                                        Check In
+                                    </Button>
+                                    <Button onClick={handleCheckout} variant="secondary" disabled>
+                                        <LogOut className="h-4 w-4 mr-2" />
+                                        Check Out
+                                    </Button>
+                                </div>
+                            ) : (
+                                <></>
+                            )
+                        )}
+                    </div>
+                </Card>
+
+                {/* Stats Grid */}
+                <div className={`grid grid-cols-2 ${canViewAll ? 'md:grid-cols-3' : 'md:grid-cols-4'} gap-4 mb-6`}>
+                    <Card className="p-4 bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50">
+                        <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-green-500/10 flex items-center justify-center">
+                                <CheckCircle2 className="h-5 w-5 text-green-500" />
+                            </div>
+                            <div>
+                                <p className="text-2xl font-bold text-slate-900 dark:text-white">{presentDays}</p>
+                                <p className="text-sm text-slate-500 dark:text-slate-400">Present</p>
+                            </div>
+                        </div>
+                    </Card>
+                    <Card className="p-4 bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50">
+                        <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-red-500/10 flex items-center justify-center">
+                                <XCircle className="h-5 w-5 text-red-500" />
+                            </div>
+                            <div>
+                                <p className="text-2xl font-bold text-slate-900 dark:text-white">{absentDays}</p>
+                                <p className="text-sm text-slate-500 dark:text-slate-400">Absent</p>
+                            </div>
+                        </div>
+                    </Card>
+                    {!canViewAll && (
+                        <Card className="p-4 bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50">
+                            <div className="flex items-center gap-3">
+                                <div className="h-10 w-10 rounded-xl bg-orange-500/10 flex items-center justify-center">
+                                    <Calendar className="h-5 w-5 text-orange-500" />
+                                </div>
+                                <div>
+                                    <p className="text-2xl font-bold text-slate-900 dark:text-white">{leaveDays}</p>
+                                    <p className="text-sm text-slate-500 dark:text-slate-400">Leave</p>
+                                </div>
+                            </div>
+                        </Card>
+                    )}
+                    <Card className="p-4 bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50">
+                        <div className="flex items-center gap-3">
+                            <div className="h-10 w-10 rounded-xl bg-violet-500/10 flex items-center justify-center">
+                                <Clock className="h-5 w-5 text-violet-500" />
+                            </div>
+                            <div>
+                                <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                                    {Math.round((presentDays / (presentDays + absentDays || 1)) * 100)}%
+                                </p>
+                                <p className="text-sm text-slate-500 dark:text-slate-400">Rate</p>
+                            </div>
+                        </div>
+                    </Card>
+                </div>
+
+                {/* Month Filter & Actions */}
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-4">
+                        <Label className="text-slate-600 dark:text-slate-300">Month:</Label>
+                        <input
+                            type="month"
+                            value={selectedMonth}
+                            onChange={(e) => setSelectedMonth(e.target.value)}
+                            className="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                        />
+                    </div>
+                    {canViewAll && (
+                        <Button
+                            onClick={downloadCSV}
+                            className="bg-[#13498a] hover:bg-[#13498a]/90 text-white shadow-lg shadow-blue-500/10"
+                        >
+                            <Download className="h-4 w-4 mr-2" />
+                            Download CSV
+                        </Button>
+                    )}
+                </div>
+
+                {/* Attendance Table */}
+                <Card className="bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/50 overflow-hidden">
+                    <Table>
+                        <TableHeader>
+                            <TableRow className="border-slate-200 dark:border-slate-700/50">
+                                {canViewAll && <TableHead>Employee</TableHead>}
+                                <TableHead>Date</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead>Check In</TableHead>
+                                <TableHead>Check Out</TableHead>
+                                <TableHead>Hours</TableHead>
+                                <TableHead>Overtime</TableHead>
+                                <TableHead>Notes</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {attendances.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={canViewAll ? 7 : 6} className="text-center py-12 text-slate-500 dark:text-slate-400">
+                                        No attendance records for this month
+                                    </TableCell>
+                                </TableRow>
+                            ) : (
+                                attendances.map((attendance) => {
+                                    const displayHours = attendance.workingHours ?? null
+
+                                    return (
+                                    <TableRow key={attendance.id} className="border-slate-100 dark:border-slate-700/30">
+                                        {canViewAll && (
+                                            <TableCell>
+                                                <div>
+                                                    <p className="font-medium text-slate-900 dark:text-white">
+                                                        {attendance.user.name}
+                                                    </p>
+                                                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                                                        {attendance.user.department || '-'}
+                                                    </p>
+                                                </div>
+                                            </TableCell>
+                                        )}
+                                        <TableCell className="text-slate-900 dark:text-white">
+                                            {formatDate(attendance.date)}
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge variant="outline" className={getStatusColor(attendance.status)}>
+                                                {attendance.status}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell className="text-slate-600 dark:text-slate-300">
+                                            {attendance.checkIn
+                                                ? formatTimeInIST(attendance.checkIn)
+                                                : '-'}
+                                        </TableCell>
+                                        <TableCell className="text-slate-600 dark:text-slate-300">
+                                            {attendance.checkOut
+                                                ? formatTimeInIST(attendance.checkOut)
+                                                : '-'}
+                                        </TableCell>
+                                        <TableCell className="text-slate-900 dark:text-white font-medium">
+                                            {displayHours !== null
+                                                ? `${displayHours.toFixed(2)}h`
+                                                : '-'}
+                                        </TableCell>
+                                        <TableCell>
+                                            {attendance.isOvertime ? (
+                                                <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20">
+                                                    {attendance.overtimeHours?.toFixed(2)}h
+                                                </Badge>
+                                            ) : (
+                                                <span className="text-slate-400">-</span>
+                                            )}
+                                        </TableCell>
+                                    <TableCell className="text-slate-600 dark:text-slate-300 max-w-[200px] truncate">
+                                        {attendance.notes || '-'}
+                                    </TableCell>
+                                    </TableRow>
+                                    )
+                                })
+                            )}
+                        </TableBody>
+                    </Table>
+                </Card>
+            </div>
+
+            {/* Mark Attendance Dialog */}
+            <Dialog open={markDialogOpen} onOpenChange={setMarkDialogOpen}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Mark Attendance</DialogTitle>
+                        <DialogDescription>
+                            Record your attendance for today
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <form onSubmit={handleMarkAttendance} className="space-y-4">
+                        <div className="space-y-2">
+                            <Label>Status</Label>
+                            <Select
+                                value={formData.status}
+                                onValueChange={(value) => setFormData({ ...formData, status: value })}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="PRESENT">Present</SelectItem>
+                                    <SelectItem value="LEAVE">Leave</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Notes (Optional)</Label>
+                            <Textarea
+                                value={formData.notes}
+                                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                                placeholder="Any additional notes..."
+                                rows={3}
+                            />
+                        </div>
+
+                        <DialogFooter>
+                            <Button type="button" variant="outline" onClick={() => setMarkDialogOpen(false)}>
+                                Cancel
+                            </Button>
+                            <LoadingButton type="submit" loading={saving}>
+                                Mark Attendance
+                            </LoadingButton>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+        </div>
+    )
+}
