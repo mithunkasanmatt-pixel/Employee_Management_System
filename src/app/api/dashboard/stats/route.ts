@@ -1,0 +1,215 @@
+import { NextResponse } from 'next/server'
+import prisma from '@/lib/prisma'
+import { getSession } from '@/lib/auth-server'
+import { getISTStartOfDayUTC } from '@/lib/time-utils'
+
+export async function GET() {
+    try {
+        const session = await getSession()
+        if (!session) {
+            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+
+        const today = getISTStartOfDayUTC()
+
+        const where: Record<string, any> = {}
+        const reportWhere: Record<string, any> = {}
+
+        if (['EMPLOYEE', 'INTERN'].includes(session.role)) {
+            where.assignedToId = session.userId
+            reportWhere.userId = session.userId
+        } else if (['BA', 'MANAGER', 'TEAM_LEADER', 'TEAM_COORDINATOR', 'PA'].includes(session.role)) {
+            where.OR = [
+                { assignedToId: session.userId },
+                { createdById: session.userId },
+                { assignedTo: { managerId: session.userId } },
+                { assignedTo: { manager: { managerId: session.userId } } }
+            ]
+            reportWhere.OR = [
+                { userId: session.userId },
+                { user: { managerId: session.userId } },
+                { user: { manager: { managerId: session.userId } } }
+            ]
+        }
+
+        // Recent projects
+        const recentProjects = await prisma.project.findMany({
+            where,
+            take: 5,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                assignedTo: {
+                    select: { id: true, name: true },
+                },
+            },
+        })
+
+        // Recent reports
+        const recentReports = await prisma.dailyReport.findMany({
+            where: reportWhere,
+            take: 5,
+            orderBy: { createdAt: 'desc' },
+            include: {
+                user: {
+                    select: { id: true, name: true },
+                },
+                project: {
+                    select: { id: true, title: true },
+                },
+            },
+        })
+
+        // Get stats based on role
+        if (!['ADMIN', 'HR'].includes(session.role)) {
+            // Individual stats
+            const [
+                myProjects,
+                myCompletedProjects,
+                myReportsThisMonth,
+                myAttendanceThisMonth,
+                myOvertimeThisMonth,
+            ] = await Promise.all([
+                prisma.project.count({
+                    where: { assignedToId: session.userId },
+                }),
+                prisma.project.count({
+                    where: { assignedToId: session.userId, status: 'COMPLETED' },
+                }),
+                prisma.dailyReport.count({
+                    where: {
+                        userId: session.userId,
+                        date: {
+                            gte: new Date(today.getFullYear(), today.getMonth(), 1),
+                        },
+                    },
+                }),
+                prisma.attendance.count({
+                    where: {
+                        userId: session.userId,
+                        status: 'PRESENT',
+                        date: {
+                            gte: new Date(today.getFullYear(), today.getMonth(), 1),
+                        },
+                    },
+                }),
+                prisma.attendance.aggregate({
+                    where: {
+                        userId: session.userId,
+                        date: {
+                            gte: new Date(today.getFullYear(), today.getMonth(), 1),
+                        },
+                    },
+                    _sum: {
+                        overtimeHours: true
+                    }
+                })
+            ])
+
+            return NextResponse.json({
+                stats: {
+                    myProjects,
+                    myCompletedProjects,
+                    myReportsThisMonth,
+                    myAttendanceThisMonth,
+                    myOvertimeThisMonth: myOvertimeThisMonth._sum.overtimeHours || 0,
+                },
+                recentProjects,
+                recentReports,
+            })
+        }
+
+        // Admin/HR stats (Global)
+        const [
+            totalEmployees,
+            activeEmployees,
+            totalProjects,
+            activeProjects,
+            completedProjects,
+            pendingProjects,
+            todayAttendance,
+            totalReportsToday,
+            pendingWfhRequests,
+            totalOvertimeToday,
+            totalPresentToday,
+            totalAbsentToday,
+        ] = await Promise.all([
+            prisma.user.count(),
+            prisma.user.count({ where: { status: 'ACTIVE' } }),
+            prisma.project.count(),
+            prisma.project.count({ where: { status: 'IN_PROGRESS' } }),
+            prisma.project.count({ where: { status: 'COMPLETED' } }),
+            prisma.project.count({ where: { status: 'PENDING' } }),
+            prisma.attendance.count({
+                where: {
+                    date: today,
+                    status: 'PRESENT',
+                },
+            }),
+            prisma.dailyReport.count({
+                where: {
+                    date: {
+                        gte: today,
+                    },
+                },
+            }),
+            prisma.workFromHomeRequest.count({
+                where: { status: 'PENDING' },
+            }),
+            prisma.attendance.aggregate({
+                where: {
+                    date: today,
+                },
+                _sum: {
+                    overtimeHours: true
+                }
+            }),
+            prisma.attendance.count({
+                where: {
+                    date: today,
+                    status: 'PRESENT',
+                    user: {
+                        status: 'ACTIVE',
+                        role: { not: 'ADMIN' },
+                    },
+                },
+            }),
+            prisma.user.count({
+                where: {
+                    status: 'ACTIVE',
+                    role: { not: 'ADMIN' },
+                    attendances: {
+                        none: {
+                            date: today,
+                            status: 'PRESENT',
+                        },
+                    },
+                },
+            }),
+        ])
+
+        return NextResponse.json({
+            stats: {
+                totalEmployees,
+                activeEmployees,
+                totalProjects,
+                activeProjects,
+                completedProjects,
+                pendingProjects,
+                todayAttendance,
+                totalPresentToday,
+                totalAbsentToday,
+                totalReportsToday,
+                pendingWfhRequests,
+                totalOvertimeToday: totalOvertimeToday._sum.overtimeHours || 0,
+            },
+            recentProjects,
+            recentReports,
+        })
+    } catch (error) {
+        console.error('Dashboard stats error:', error)
+        return NextResponse.json(
+            { error: 'Internal server error' },
+            { status: 500 }
+        )
+    }
+}

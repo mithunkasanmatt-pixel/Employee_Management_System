@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#13498a"/>
+      <stop offset="50%" stop-color="#1e3a8a"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="coralGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f43f5e"/>
+      <stop offset="100%" stop-color="#b12024"/>
+    </linearGradient>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e2e8f0"/>
+    </linearGradient>
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Background Card -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)"/>
+  
+  <!-- Subtle border outline -->
+  <rect x="8" y="8" width="496" height="496" rx="120" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="6"/>
+
+  <!-- Glowing Accent Ring -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="rgba(56,189,248,0.12)" stroke-width="24"/>
+
+  <!-- Main Management / Team Icon Group -->
+  <g filter="url(#dropShadow)">
+    <!-- Central Leader / Manager -->
+    <!-- Head -->
+    <circle cx="256" cy="168" r="46" fill="url(#shieldGrad)"/>
+    <circle cx="256" cy="168" r="40" fill="#ffffff"/>
+    <!-- Body / Shoulders -->
+    <path d="M184 290 C184 235 328 235 328 290 C328 304 316 312 300 312 L212 312 C196 312 184 304 184 290 Z" fill="url(#shieldGrad)"/>
+
+    <!-- Left Team Member -->
+    <!-- Head -->
+    <circle cx="152" cy="214" r="32" fill="url(#accentGrad)"/>
+    <!-- Body -->
+    <path d="M100 316 C100 274 204 274 204 316 C204 326 196 332 184 332 L120 332 C108 332 100 326 100 316 Z" fill="url(#accentGrad)"/>
+
+    <!-- Right Team Member -->
+    <!-- Head -->
+    <circle cx="360" cy="214" r="32" fill="url(#coralGrad)"/>
+    <!-- Body -->
+    <path d="M308 316 C308 274 412 274 412 316 C412 326 404 332 392 332 L328 332 C316 332 308 326 308 316 Z" fill="url(#coralGrad)"/>
+
+    <!-- Interconnected Enterprise Foundation Bar -->
+    <rect x="140" y="356" width="232" height="18" rx="9" fill="url(#accentGrad)"/>
+    <!-- Connection Dots -->
+    <circle cx="152" cy="365" r="12" fill="#ffffff"/>
+    <circle cx="256" cy="365" r="14" fill="#ffffff"/>
+    <circle cx="360" cy="365" r="12" fill="#ffffff"/>
+  </g>
+</svg>
